@@ -1,0 +1,7 @@
+{
+  "name": "Copy of JHPCIC Insurance Protocol",
+  "description": "中国人寿财险前端协议系统 (Stage 1). A pure static, URL-parameter driven insurance processing flow including Admin entry, Buffer delay, and Client verification/payment.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
