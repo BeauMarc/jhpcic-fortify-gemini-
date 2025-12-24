@@ -1,5 +1,7 @@
-import React, { useState, useEffect } from 'react';
+
+import React, { useState, useEffect, useRef } from 'react';
 import { encodeData, InsuranceData, CoverageItem } from '../utils/codec';
+import { scanPersonImage, scanVehicleImage } from '../utils/ai';
 import QRCode from 'qrcode';
 
 // Types for Profiles
@@ -78,16 +80,16 @@ const Admin: React.FC = () => {
   const [generatedLink, setGeneratedLink] = useState<string>('');
   const [isPaidMode, setIsPaidMode] = useState(false);
   const [isCloudLoading, setIsCloudLoading] = useState(false);
+  const [isAIScanning, setIsAIScanning] = useState(false);
   
-  // Storage
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [personProfiles, setPersonProfiles] = useState<PersonProfile[]>([]);
   const [vehicleProfiles, setVehicleProfiles] = useState<VehicleProfile[]>([]);
 
-  // Environment Check
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const isLocal = window.location.protocol === 'file:' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
-  // Auto-calculate total premium
   useEffect(() => {
     const total = data.project.coverages.reduce((sum, item) => {
       const val = parseFloat(item.premium.replace(/,/g, ''));
@@ -113,7 +115,6 @@ const Admin: React.FC = () => {
     }));
   };
 
-  // --- Profile Management Logic ---
   const savePersonProfile = (person: InsuranceData['proposer']) => {
     if (!person.name || !person.mobile) { alert("请至少填写名称和手机号才能保存"); return; }
     const newProfile: PersonProfile = { id: `${person.name}-${person.mobile}`, ...person };
@@ -148,7 +149,53 @@ const Admin: React.FC = () => {
     setData(prev => ({ ...prev, vehicle: { ...profile } }));
   };
 
-  // --- Date Logic ---
+  const triggerAIScan = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsAIScanning(true);
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const base64 = event.target?.result as string;
+      
+      try {
+        if (activeTab === 'proposer' || activeTab === 'insured') {
+          const result = await scanPersonImage(base64);
+          if (result) {
+            setData(prev => ({
+              ...prev,
+              [activeTab]: {
+                ...prev[activeTab as 'proposer' | 'insured'],
+                ...result
+              }
+            }));
+          }
+        } else if (activeTab === 'vehicle') {
+          const result = await scanVehicleImage(base64);
+          if (result) {
+            setData(prev => ({
+              ...prev,
+              vehicle: {
+                ...prev.vehicle,
+                ...result
+              }
+            }));
+          }
+        }
+      } catch (err) {
+        alert("AI 扫描失败，请检查网络或手动录入。");
+      } finally {
+        setIsAIScanning(false);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleStartDateChange = (startDate: string) => {
     if (!startDate) return;
     const start = new Date(startDate);
@@ -180,11 +227,9 @@ const Admin: React.FC = () => {
     setData(prev => ({ ...prev, project: { ...prev.project, coverages: newCoverages } }));
   };
 
-  // --- GENERATE LINK LOGIC (Cloudflare Integrated) ---
   const generateLink = async () => {
     const payload = { ...data, status: isPaidMode ? 'paid' : 'pending' };
     
-    // Save to Local History immediately
     const newRecord: HistoryRecord = {
       id: Date.now().toString(),
       timestamp: new Date().toLocaleString(),
@@ -198,38 +243,31 @@ const Admin: React.FC = () => {
 
     setIsCloudLoading(true);
 
-    // Setup Timeout Controller (3 Seconds)
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 3000);
 
-    // Try Cloudflare Save first (Stage 2)
     try {
       const response = await fetch('/api/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-        signal: controller.signal // Bind abort signal
+        signal: controller.signal 
       });
       
-      clearTimeout(timeoutId); // Clear timeout if successful response
+      clearTimeout(timeoutId); 
 
       if (response.ok) {
         const resData = await response.json();
         if (resData.id) {
-           // Success: Use Short URL
-           console.log("Cloudflare Save Success, ID:", resData.id);
            finalUrl = `${baseUrl}#/buffer?id=${resData.id}`;
         }
-      } else {
-        console.warn("Cloudflare API returned error, falling back to Base64");
       }
     } catch (e) {
-      console.warn("Offline, Local mode, or Timeout. Using Base64 fallback.", e);
+      console.warn("Cloudflare KV Save failed, falling back to Base64.", e);
     } finally {
       setIsCloudLoading(false);
     }
 
-    // Fallback to Base64 (Stage 1) if Cloudflare failed/timed out
     if (!finalUrl) {
       const base64 = encodeData(payload);
       finalUrl = `${baseUrl}#/buffer?data=${base64}`;
@@ -238,7 +276,7 @@ const Admin: React.FC = () => {
     setGeneratedLink(finalUrl);
     
     try {
-      const qr = await QRCode.toDataURL(finalUrl);
+      const qr = await QRCode.toDataURL(finalUrl, { margin: 2, width: 600 });
       setQrCode(qr);
     } catch (err) {
       console.error(err);
@@ -246,7 +284,7 @@ const Admin: React.FC = () => {
   };
 
   const loadRecord = (record: HistoryRecord) => {
-    if (!window.confirm(`确认要复用 "${record.summary}" 的信息吗？\n当前未保存的修改将会丢失。`)) return;
+    if (!window.confirm(`确认加载 "${record.summary}"？`)) return;
     const freshData: InsuranceData = { ...record.data, orderId: `JH-${Math.floor(Math.random() * 100000)}`, status: 'pending' };
     setData(freshData);
     setQrCode('');
@@ -263,28 +301,33 @@ const Admin: React.FC = () => {
             <p className="text-sm opacity-90 font-light tracking-wider">业务员录入系统 (Autopay)</p>
           </div>
           <div className="text-right hidden md:block">
-            <span className="bg-white/10 px-3 py-1 rounded-full text-xs backdrop-blur-sm border border-white/20">Stage 2: Cloudflare Ready</span>
+            <span className="bg-white/10 px-3 py-1 rounded-full text-xs backdrop-blur-sm border border-white/20">KV Storage Mode</span>
           </div>
         </div>
       </header>
 
-      {/* Environment Warning Banner */}
-      {isLocal && (
-        <div className="bg-red-50 border-b border-red-100 p-2 text-center text-red-600 text-xs font-bold">
-          ⚠️ 检测到本地环境 (Localhost/File)。生成的二维码无法被手机扫描。请将项目部署至 Cloudflare Pages 以使用在线功能。
+      <input type="file" accept="image/*" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
+
+      {isAIScanning && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+           <div className="bg-white p-8 rounded-3xl shadow-2xl flex flex-col items-center gap-6 animate-fade-in">
+              <div className="w-20 h-20 border-4 border-jh-green/20 border-t-jh-green rounded-full animate-spin"></div>
+              <div className="text-center">
+                <p className="text-xl font-bold text-gray-800">AI 正在扫描提取...</p>
+              </div>
+           </div>
         </div>
       )}
 
       <div className="max-w-5xl mx-auto p-4 md:p-8">
         
-        {/* Navigation Tabs */}
         <div className="flex overflow-x-auto gap-3 mb-8 pb-2 hide-scrollbar">
-          {['proposer', 'insured', 'vehicle', 'project', 'generate', 'history'].map(tab => {
+          {(['proposer', 'insured', 'vehicle', 'project', 'generate', 'history'] as const).map(tab => {
             const isActive = activeTab === tab;
             return (
               <button
                 key={tab}
-                onClick={() => setActiveTab(tab as any)}
+                onClick={() => setActiveTab(tab)}
                 className={`px-6 py-3 rounded-xl whitespace-nowrap text-sm font-bold transition-all duration-300 shadow-sm border ${
                   isActive 
                     ? 'bg-jh-green text-white border-jh-green shadow-md transform scale-105' 
@@ -296,98 +339,61 @@ const Admin: React.FC = () => {
                 {tab === 'vehicle' && '3. 车辆信息'}
                 {tab === 'project' && '4. 投保方案'}
                 {tab === 'generate' && '5. 生成链接'}
-                {tab === 'history' && (
-                  <span className="flex items-center gap-2">
-                    6. 历史
-                    {history.length > 0 && <span className="bg-red-500 text-white text-[10px] px-1.5 rounded-full">{history.length}</span>}
-                  </span>
-                )}
+                {tab === 'history' && '6. 历史'}
               </button>
             );
           })}
         </div>
 
-        {/* Content Area */}
-        <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-6 md:p-10 min-h-[500px] transition-all">
+        <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-6 md:p-10 transition-all">
           
-          {/* ... (Proposer, Insured, Vehicle, Project Tabs logic remains same, just rendering below) ... */}
           {activeTab === 'proposer' && (
             <div className="animate-fade-in space-y-8">
-              <div className="border-b border-gray-100 pb-4 mb-6 flex justify-between items-end">
-                <div>
-                    <h2 className="text-2xl font-bold text-gray-800">投保人信息录入</h2>
-                    <p className="text-gray-400 text-sm mt-1">请输入投保人的基本身份信息，手机号将用于接收验证码。</p>
-                </div>
-                <div className="flex gap-2">
-                   {personProfiles.length > 0 && (
-                     <select 
-                       className="bg-gray-50 border border-gray-200 text-gray-700 text-sm rounded-lg p-2 focus:ring-jh-green focus:border-jh-green"
-                       onChange={(e) => { if(e.target.value) loadPersonProfile(e.target.value, 'proposer'); e.target.value = ""; }}
-                     >
-                       <option value="">📂 从通讯录读取...</option>
-                       {personProfiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                     </select>
-                   )}
-                   <button onClick={() => savePersonProfile(data.proposer)} className="bg-blue-50 text-blue-600 hover:bg-blue-100 px-3 py-2 rounded-lg text-sm font-bold transition-colors">💾 保存</button>
-                </div>
+              <div className="border-b border-gray-100 pb-4 flex justify-between items-end">
+                <h2 className="text-2xl font-bold text-gray-800">投保人信息</h2>
+                <button onClick={triggerAIScan} className="bg-jh-green/10 text-jh-green px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2"><span>✨</span> AI 识别</button>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                <FloatingInput label="名称" value={data.proposer.name} onChange={(v) => handleInputChange('proposer', 'name', v)} />
-                <FloatingInput label="手机号 (用于验证)" value={data.proposer.mobile} onChange={(v) => handleInputChange('proposer', 'mobile', v)} type="tel" />
-                <FloatingInput label="证件类型" value={data.proposer.idType} onChange={(v) => handleInputChange('proposer', 'idType', v)} />
-                <FloatingInput label="证件号" value={data.proposer.idCard} onChange={(v) => handleInputChange('proposer', 'idCard', v)} />
-                <div className="md:col-span-2"><FloatingInput label="住址" value={data.proposer.address} onChange={(v) => handleInputChange('proposer', 'address', v)} /></div>
+                <FloatingInput label="名称" value={data.proposer.name} onChange={(v: string) => handleInputChange('proposer', 'name', v)} />
+                <FloatingInput label="手机号" value={data.proposer.mobile} onChange={(v: string) => handleInputChange('proposer', 'mobile', v)} type="tel" />
+                <FloatingInput label="证件类型" value={data.proposer.idType} onChange={(v: string) => handleInputChange('proposer', 'idType', v)} />
+                <FloatingInput label="证件号" value={data.proposer.idCard} onChange={(v: string) => handleInputChange('proposer', 'idCard', v)} />
+                <div className="md:col-span-2"><FloatingInput label="住址" value={data.proposer.address} onChange={(v: string) => handleInputChange('proposer', 'address', v)} /></div>
               </div>
             </div>
           )}
 
           {activeTab === 'insured' && (
-             <div className="animate-fade-in space-y-8">
-               <div className="border-b border-gray-100 pb-4 mb-6 flex justify-between items-end">
-                <div><h2 className="text-2xl font-bold text-gray-800">被保险人信息</h2></div>
-                <div className="flex gap-2">
-                   {personProfiles.length > 0 && (
-                     <select className="bg-gray-50 border border-gray-200 text-gray-700 text-sm rounded-lg p-2" onChange={(e) => { if(e.target.value) loadPersonProfile(e.target.value, 'insured'); e.target.value = ""; }}>
-                       <option value="">📂 从通讯录读取...</option>
-                       {personProfiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                     </select>
-                   )}
-                   <button onClick={() => savePersonProfile(data.insured)} className="bg-blue-50 text-blue-600 hover:bg-blue-100 px-3 py-2 rounded-lg text-sm font-bold">💾 保存</button>
-                </div>
+            <div className="animate-fade-in space-y-8">
+               <div className="border-b border-gray-100 pb-4 flex justify-between items-end">
+                <h2 className="text-2xl font-bold text-gray-800">被保险人信息</h2>
+                <button onClick={triggerAIScan} className="bg-jh-green/10 text-jh-green px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2"><span>✨</span> AI 识别</button>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                <FloatingInput label="名称" value={data.insured.name} onChange={(v) => handleInputChange('insured', 'name', v)} />
-                <FloatingInput label="手机号" value={data.insured.mobile} onChange={(v) => handleInputChange('insured', 'mobile', v)} type="tel" />
-                <FloatingInput label="证件类型" value={data.insured.idType} onChange={(v) => handleInputChange('insured', 'idType', v)} />
-                <FloatingInput label="证件号" value={data.insured.idCard} onChange={(v) => handleInputChange('insured', 'idCard', v)} />
-                <div className="md:col-span-2"><FloatingInput label="住址" value={data.insured.address} onChange={(v) => handleInputChange('insured', 'address', v)} /></div>
+                <FloatingInput label="名称" value={data.insured.name} onChange={(v: string) => handleInputChange('insured', 'name', v)} />
+                <FloatingInput label="手机号" value={data.insured.mobile} onChange={(v: string) => handleInputChange('insured', 'mobile', v)} type="tel" />
+                <FloatingInput label="证件类型" value={data.insured.idType} onChange={(v: string) => handleInputChange('insured', 'idType', v)} />
+                <FloatingInput label="证件号" value={data.insured.idCard} onChange={(v: string) => handleInputChange('insured', 'idCard', v)} />
+                <div className="md:col-span-2"><FloatingInput label="住址" value={data.insured.address} onChange={(v: string) => handleInputChange('insured', 'address', v)} /></div>
               </div>
             </div>
           )}
 
           {activeTab === 'vehicle' && (
             <div className="animate-fade-in space-y-8">
-              <div className="border-b border-gray-100 pb-4 mb-6 flex justify-between items-end">
-                 <div><h2 className="text-2xl font-bold text-gray-800">车辆信息</h2></div>
-                 <div className="flex gap-2">
-                   {vehicleProfiles.length > 0 && (
-                     <select className="bg-gray-50 border border-gray-200 text-gray-700 text-sm rounded-lg p-2" onChange={(e) => { if(e.target.value) loadVehicleProfile(e.target.value); e.target.value = ""; }}>
-                       <option value="">📂 从车库读取...</option>
-                       {vehicleProfiles.map(p => <option key={p.id} value={p.id}>{p.plate}</option>)}
-                     </select>
-                   )}
-                   <button onClick={() => saveVehicleProfile(data.vehicle)} className="bg-blue-50 text-blue-600 hover:bg-blue-100 px-3 py-2 rounded-lg text-sm font-bold">💾 保存</button>
-                </div>
+              <div className="border-b border-gray-100 pb-4 flex justify-between items-end">
+                 <h2 className="text-2xl font-bold text-gray-800">车辆信息</h2>
+                 <button onClick={triggerAIScan} className="bg-jh-green/10 text-jh-green px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2"><span>✨</span> 行驶证识别</button>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                <FloatingInput label="车牌号" value={data.vehicle.plate} onChange={(v) => handleInputChange('vehicle', 'plate', v)} />
-                <FloatingInput label="机动车辆所有人" value={data.vehicle.vehicleOwner} onChange={(v) => handleInputChange('vehicle', 'vehicleOwner', v)} />
-                <FloatingInput label="品牌型号" value={data.vehicle.brand} onChange={(v) => handleInputChange('vehicle', 'brand', v)} />
-                <FloatingInput label="车架号 (VIN)" value={data.vehicle.vin} onChange={(v) => handleInputChange('vehicle', 'vin', v)} />
-                <FloatingInput label="发动机号" value={data.vehicle.engineNo} onChange={(v) => handleInputChange('vehicle', 'engineNo', v)} />
-                <FloatingInput label="初次登记日期" value={data.vehicle.registerDate} onChange={(v) => handleInputChange('vehicle', 'registerDate', v)} type="date" />
-                <FloatingInput label="整备质量" value={data.vehicle.curbWeight} onChange={(v) => handleInputChange('vehicle', 'curbWeight', v)} />
-                <FloatingInput label="核定载质量" value={data.vehicle.approvedLoad} onChange={(v) => handleInputChange('vehicle', 'approvedLoad', v)} />
+                <FloatingInput label="车牌号" value={data.vehicle.plate} onChange={(v: string) => handleInputChange('vehicle', 'plate', v)} />
+                <FloatingInput label="车辆所有人" value={data.vehicle.vehicleOwner} onChange={(v: string) => handleInputChange('vehicle', 'vehicleOwner', v)} />
+                <FloatingInput label="品牌型号" value={data.vehicle.brand} onChange={(v: string) => handleInputChange('vehicle', 'brand', v)} />
+                <FloatingInput label="车架号 (VIN)" value={data.vehicle.vin} onChange={(v: string) => handleInputChange('vehicle', 'vin', v)} />
+                <FloatingInput label="发动机号" value={data.vehicle.engineNo} onChange={(v: string) => handleInputChange('vehicle', 'engineNo', v)} />
+                <FloatingInput label="初次登记日期" value={data.vehicle.registerDate} onChange={(v: string) => handleInputChange('vehicle', 'registerDate', v)} type="date" />
+                <FloatingInput label="整备质量" value={data.vehicle.curbWeight} onChange={(v: string) => handleInputChange('vehicle', 'curbWeight', v)} />
+                <FloatingInput label="核定载质量" value={data.vehicle.approvedLoad} onChange={(v: string) => handleInputChange('vehicle', 'approvedLoad', v)} />
               </div>
             </div>
           )}
@@ -398,111 +404,67 @@ const Admin: React.FC = () => {
                  <h2 className="text-2xl font-bold text-gray-800">投保方案</h2>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
-                <FloatingInput label="投保地区" value={data.project.region} onChange={(v) => handleInputChange('project', 'region', v)} />
-                <div className="bg-white rounded-xl border border-gray-300 p-4 relative group hover:border-gray-400">
+                <FloatingInput label="投保地区" value={data.project.region} onChange={(v: string) => handleInputChange('project', 'region', v)} />
+                <div className="bg-white rounded-xl border border-gray-300 p-4 relative">
                     <label className="absolute -top-3 left-3 bg-white px-1 text-sm text-jh-green font-medium">保险期间</label>
                     <div className="flex items-center gap-2">
-                        <div className="flex-1"><input type="date" className="w-full outline-none" value={data.project.period.split(' 至 ')[0]||''} onChange={(e) => handleStartDateChange(e.target.value)}/></div>
+                        <input type="date" className="flex-1 outline-none" value={data.project.period.split(' 至 ')[0]||''} onChange={(e) => handleStartDateChange(e.target.value)}/>
                         <span className="text-gray-300">至</span>
-                        <div className="flex-1 text-right"><input type="date" className="w-full outline-none text-right" value={data.project.period.split(' 至 ')[1]||''} onChange={(e) => handleEndDateChange(e.target.value)}/></div>
+                        <input type="date" className="flex-1 outline-none text-right" value={data.project.period.split(' 至 ')[1]||''} onChange={(e) => handleEndDateChange(e.target.value)}/>
                     </div>
                 </div>
               </div>
-              <div className="bg-gray-50 rounded-2xl border border-gray-100 p-4">
-                <div className="flex justify-between items-center mb-4 px-2">
-                   <label className="text-base font-bold text-gray-700">险种明细表</label>
-                   <button onClick={addCoverage} className="text-sm bg-white border border-gray-200 text-gray-600 px-4 py-2 rounded-lg">+ 添加险种</button>
-                </div>
-                <table className="w-full text-sm text-left"><tbody className="divide-y divide-gray-100">
+              <div className="bg-gray-50 rounded-2xl p-4 overflow-x-auto">
+                <table className="w-full text-sm text-left">
+                  <thead><tr className="text-gray-400 border-b border-gray-200">
+                    <th className="p-3">险种</th><th className="p-3">保额</th><th className="p-3">免赔</th><th className="p-3">保费</th><th className="p-3 text-center">操作</th>
+                  </tr></thead>
+                  <tbody>
                       {data.project.coverages.map((item, idx) => (
-                        <tr key={idx}>
-                          <td className="p-3"><input className="w-full bg-transparent border-b border-transparent focus:border-jh-green" value={item.name} placeholder="险种名称" onChange={(e) => handleCoverageChange(idx, 'name', e.target.value)} /></td>
-                          <td className="p-3"><input className="w-full bg-transparent border-b border-transparent focus:border-jh-green font-mono" value={item.amount} placeholder="保额" onChange={(e) => handleCoverageChange(idx, 'amount', e.target.value)} /></td>
-                          <td className="p-3"><input className="w-full bg-transparent border-b border-transparent focus:border-jh-green" value={item.deductible} placeholder="免赔" onChange={(e) => handleCoverageChange(idx, 'deductible', e.target.value)} /></td>
-                          <td className="p-3"><input className="w-full bg-transparent border-b border-transparent focus:border-jh-green font-mono" value={item.premium} placeholder="保费" onChange={(e) => handleCoverageChange(idx, 'premium', e.target.value)} /></td>
-                          <td className="p-3 text-center"><button onClick={() => removeCoverage(idx)} className="text-gray-300 hover:text-red-500 font-bold">&times;</button></td>
+                        <tr key={idx} className="border-b border-gray-100">
+                          <td className="p-3"><input className="w-full bg-transparent outline-none" value={item.name} onChange={(e) => handleCoverageChange(idx, 'name', e.target.value)} /></td>
+                          <td className="p-3"><input className="w-full bg-transparent font-mono outline-none" value={item.amount} onChange={(e) => handleCoverageChange(idx, 'amount', e.target.value)} /></td>
+                          <td className="p-3"><input className="w-full bg-transparent outline-none" value={item.deductible} onChange={(e) => handleCoverageChange(idx, 'deductible', e.target.value)} /></td>
+                          <td className="p-3"><input className="w-full bg-transparent font-mono outline-none" value={item.premium} onChange={(e) => handleCoverageChange(idx, 'premium', e.target.value)} /></td>
+                          <td className="p-3 text-center"><button onClick={() => removeCoverage(idx)} className="text-red-300 hover:text-red-500 font-bold">&times;</button></td>
                         </tr>
                       ))}
                     </tbody>
-                    <tfoot className="bg-gray-50 border-t border-gray-200">
-                       <tr><td colSpan={3} className="p-4 text-right font-bold text-gray-500">保险费合计</td><td className="p-4 font-bold text-jh-green text-lg font-mono">¥ {data.project.premium}</td><td></td></tr>
-                    </tfoot>
                 </table>
+                <button onClick={addCoverage} className="mt-4 w-full py-2 bg-white border border-dashed border-gray-300 text-gray-400 rounded-lg">+ 添加险种</button>
+              </div>
+              <div className="text-right p-4">
+                 <span className="text-gray-500 font-bold mr-4">保险费合计</span>
+                 <span className="text-2xl font-bold text-jh-green font-mono">¥ {data.project.premium}</span>
               </div>
             </div>
           )}
 
           {activeTab === 'generate' && (
-            <div className="animate-fade-in flex flex-col items-center max-w-lg mx-auto py-8">
-              <h2 className="text-2xl font-bold text-gray-800 mb-8">生成客户端链接</h2>
+            <div className="animate-fade-in flex flex-col items-center max-w-lg mx-auto py-8 text-center">
+              <h2 className="text-2xl font-bold text-gray-800 mb-8">生成支付二维码</h2>
               
-              <div className="w-full bg-orange-50 p-6 rounded-2xl text-left text-sm text-orange-800 border border-orange-100 mb-8 shadow-sm">
-                <div className="flex items-start gap-3">
-                   <div className="bg-orange-200 text-orange-700 rounded-full w-6 h-6 flex items-center justify-center font-bold text-xs mt-0.5">!</div>
-                   <div>
-                      <p className="font-bold mb-1">操作说明</p>
-                      <ul className="list-disc pl-4 space-y-1 opacity-90">
-                        <li>系统将优先尝试生成<span className="font-bold text-orange-900">“云端短链接”</span> (解决微信扫码打不开问题)。</li>
-                        <li>若云端服务未连接 (超时3秒)，将自动降级为“Base64 长链接”。</li>
-                      </ul>
-                   </div>
-                </div>
-              </div>
-
-              <div className="w-full bg-white p-4 rounded-xl border border-gray-200 mb-6 flex items-center justify-between hover:border-jh-green transition-colors cursor-pointer" onClick={() => setIsPaidMode(!isPaidMode)}>
-                 <span className="font-medium text-gray-700">生成模式</span>
-                 <div className="flex items-center gap-3">
-                    <span className={`text-sm ${isPaidMode ? 'text-gray-400' : 'text-jh-green font-bold'}`}>待支付</span>
-                    <div className={`w-12 h-6 rounded-full p-1 transition-colors duration-300 flex items-center ${isPaidMode ? 'bg-jh-green justify-end' : 'bg-gray-300 justify-start'}`}>
-                        <div className="w-4 h-4 bg-white rounded-full shadow-md"></div>
-                    </div>
-                    <span className={`text-sm ${isPaidMode ? 'text-jh-green font-bold' : 'text-gray-400'}`}>已支付</span>
-                 </div>
+              <div className="bg-jh-green/5 p-6 rounded-2xl text-left text-sm text-jh-green mb-8 border border-jh-green/10">
+                 <p className="font-bold mb-2">💡 微信扫码提醒</p>
+                 <p className="opacity-80">系统已自动开启“Cloudflare KV 短链模式”。生成的二维码将极致简洁，确保在任何版本的微信、支付宝中秒开，无截断风险。</p>
               </div>
 
               <button 
                 onClick={generateLink}
                 disabled={isCloudLoading}
-                className={`w-full bg-jh-green hover:bg-emerald-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-green-200 transition-all active:scale-[0.98] text-lg flex items-center justify-center gap-2 ${isCloudLoading ? 'opacity-70 cursor-wait' : ''}`}
+                className={`w-full bg-jh-green text-white font-bold py-4 rounded-xl shadow-lg transition-all active:scale-[0.98] text-lg flex items-center justify-center gap-2 ${isCloudLoading ? 'opacity-70 cursor-wait' : ''}`}
               >
-                {isCloudLoading ? (
-                   <>
-                     <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                     正在尝试上传 (超时自动跳过)...
-                   </>
-                ) : (
-                   <>
-                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-                     生成二维码链接并归档
-                   </>
-                )}
+                {isCloudLoading ? "正在同步至云端..." : "立即生成短链二维码"}
               </button>
 
               {qrCode && (
-                <div className="mt-10 p-8 bg-white border border-gray-100 rounded-3xl shadow-2xl flex flex-col items-center animate-fade-in-up">
-                  <div className="bg-white p-2 rounded-xl border border-gray-100 shadow-inner">
-                      <img src={qrCode} alt="Client QR Code" className="w-56 h-56" />
+                <div className="mt-10 p-8 bg-white border border-gray-100 rounded-3xl shadow-2xl flex flex-col items-center w-full animate-fade-in-up">
+                  <img src={qrCode} alt="Client QR Code" className="w-64 h-64 shadow-inner p-2 border border-gray-50 rounded-lg" />
+                  <p className="text-gray-500 font-medium mt-6">请客户使用微信/支付宝扫码</p>
+                  <div className="mt-6 w-full p-3 bg-gray-50 rounded-lg text-[10px] break-all text-gray-300 font-mono">
+                     {generatedLink}
                   </div>
-                  <p className="text-gray-500 font-medium mt-6 mb-2">请客户使用微信或支付宝扫码</p>
-                  
-                  {/* URL Type Indicator */}
-                  {generatedLink.includes('?id=') ? (
-                     <span className="bg-green-100 text-green-800 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2">已启用云端短链 (KV)</span>
-                  ) : (
-                     <span className="bg-yellow-100 text-yellow-800 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2">使用 Base64 长链 (离线模式/上传失败)</span>
-                  )}
-
-                  <div className="mt-6 w-full">
-                     <div className="text-[10px] text-gray-400 mb-2 text-center uppercase tracking-widest">Debug Link</div>
-                     <div className="p-3 bg-gray-50 rounded-lg text-xs break-all text-gray-500 border border-gray-200 font-mono select-all">
-                        {generatedLink}
-                     </div>
-                  </div>
-                  
-                  <a href={generatedLink} target="_blank" rel="noreferrer" className="mt-6 text-jh-green font-bold text-sm hover:underline flex items-center gap-1">
-                    <span>电脑端跳转测试</span>
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
-                  </a>
+                  <a href={generatedLink} target="_blank" rel="noreferrer" className="mt-4 text-jh-green font-bold text-sm underline">预览客户端</a>
                 </div>
               )}
             </div>
@@ -510,16 +472,17 @@ const Admin: React.FC = () => {
 
           {activeTab === 'history' && (
              <div className="animate-fade-in space-y-6">
-               {/* History Table Implementation (Same as previous step) */}
-               <div className="border-b border-gray-100 pb-4 mb-6">
-                 <h2 className="text-2xl font-bold text-gray-800">历史生成记录</h2>
-                 <p className="text-gray-400 text-sm mt-1">本地缓存的历史记录。</p>
-              </div>
-              {history.length === 0 ? <div className="text-center py-20 text-gray-400"><p>暂无记录</p></div> : 
-                 <table className="w-full text-sm text-left"><tbody className="divide-y divide-gray-100">{history.map(r => (
-                    <tr key={r.id}><td className="p-4 text-xs">{r.timestamp}</td><td className="p-4 font-medium">{r.summary}</td><td className="p-4"><button onClick={() => loadRecord(r)} className="text-jh-green font-bold">复用</button></td></tr>
-                 ))}</tbody></table>
-              }
+               <div className="border-b border-gray-100 pb-4"><h2 className="text-2xl font-bold text-gray-800">历史归档</h2></div>
+               {history.length === 0 ? <div className="text-center py-20 text-gray-400">暂无记录</div> : 
+                 <div className="space-y-4">
+                    {history.map(r => (
+                       <div key={r.id} className="flex justify-between items-center p-4 bg-gray-50 rounded-xl hover:bg-jh-green/5 transition-colors group">
+                          <div><p className="font-bold text-gray-800">{r.summary}</p><p className="text-xs text-gray-400">{r.timestamp}</p></div>
+                          <button onClick={() => loadRecord(r)} className="text-jh-green font-bold opacity-0 group-hover:opacity-100 transition-opacity">重新加载</button>
+                       </div>
+                    ))}
+                 </div>
+               }
              </div>
           )}
         </div>
@@ -528,11 +491,25 @@ const Admin: React.FC = () => {
   );
 };
 
-const FloatingInput = ({ label, value, onChange, type = "text" }: any) => {
+interface FloatingInputProps {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  type?: string;
+}
+
+const FloatingInput: React.FC<FloatingInputProps> = ({ label, value, onChange, type = "text" }) => {
   const id = React.useId();
   return (
-    <div className="relative group">
-      <input type={type} id={id} className="block px-4 pb-3 pt-6 w-full text-base bg-white rounded-xl border border-gray-300 focus:outline-none focus:ring-1 focus:ring-jh-green focus:border-jh-green peer" placeholder=" " value={value} onChange={(e) => onChange(e.target.value)} />
+    <div className="relative">
+      <input 
+        type={type} 
+        id={id} 
+        className="block px-4 pb-2.5 pt-6 w-full text-base bg-white rounded-xl border border-gray-300 focus:ring-1 focus:ring-jh-green focus:border-jh-green peer outline-none transition-all" 
+        placeholder=" " 
+        value={value} 
+        onChange={(e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value)} 
+      />
       <label htmlFor={id} className="absolute text-sm text-gray-500 duration-300 transform -translate-y-3 scale-75 top-4 left-4 peer-placeholder-shown:scale-100 peer-placeholder-shown:translate-y-0 peer-focus:scale-75 peer-focus:-translate-y-3 pointer-events-none">{label}</label>
     </div>
   );

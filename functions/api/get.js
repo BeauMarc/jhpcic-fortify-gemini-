@@ -11,15 +11,16 @@ export async function onRequestGet(context) {
   if (!id) return new Response('Missing ID', { status: 400, headers: corsHeaders });
 
   try {
-    if (!context.env.JHPCIC_STORE) {
-       return new Response('KV Not Configured', { status: 500, headers: corsHeaders });
+    const kv = context.env.KV_BINDING || context.env.JHPCIC_STORE;
+
+    if (!kv) {
+       return new Response('KV Storage Not Configured', { status: 500, headers: corsHeaders });
     }
 
-    const rawData = await context.env.JHPCIC_STORE.get(`order:${id}`);
+    const rawData = await kv.get(`order:${id}`);
     if (!rawData) return new Response('Order Not Found or Expired', { status: 404, headers: corsHeaders });
     
     const record = JSON.parse(rawData);
-    // Return only the data payload
     return new Response(JSON.stringify(record.data), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (err) {
     return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: corsHeaders });

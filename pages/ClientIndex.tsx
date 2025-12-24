@@ -4,11 +4,55 @@ import { decodeData, InsuranceData } from '../utils/codec';
 
 type Step = 'terms' | 'verify' | 'check' | 'sign' | 'pay' | 'completed';
 
+// Default Data for Preview Mode
+const PREVIEW_DATA: InsuranceData = {
+  orderId: 'JH-PREVIEW-001',
+  status: 'pending',
+  proposer: {
+    name: '张三 (预览模式)',
+    idType: '身份证',
+    idCard: '110101199001011234',
+    mobile: '13800138000',
+    address: '北京市朝阳区建国路88号'
+  },
+  insured: {
+    name: '张三',
+    idType: '身份证',
+    idCard: '110101199001011234',
+    mobile: '13800138000',
+    address: '北京市朝阳区建国路88号'
+  },
+  vehicle: {
+    plate: '京A88888',
+    vin: 'LFVPREVIEW123456',
+    engineNo: '123456',
+    brand: '特斯拉 Model 3',
+    vehicleOwner: '张三',
+    registerDate: '2023-01-01',
+    curbWeight: '1800KG',
+    approvedLoad: '5人'
+  },
+  project: {
+    region: '北京',
+    period: '2024-05-20 至 2025-05-19',
+    premium: '15333.84',
+    coverages: [
+      { name: '机动车损失保险', amount: '300,000.00', deductible: '/', premium: '4,500.00' },
+      { name: '机动车第三者责任保险', amount: '1,000,000.00', deductible: '/', premium: '10,833.84' }
+    ]
+  },
+  payment: {
+    alipayUrl: 'https://alipay.com/example',
+    wechatUrl: 'https://wechat.com/example'
+  }
+};
+
 const ClientIndex: React.FC = () => {
   const location = useLocation();
   const [step, setStep] = useState<Step>('terms');
   const [data, setData] = useState<InsuranceData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isPreview, setIsPreview] = useState(false);
   
   // Verify State
   const [inputMobile, setInputMobile] = useState('');
@@ -52,6 +96,12 @@ const ClientIndex: React.FC = () => {
       } else {
         alert("数据解析失败，请联系业务员重新生成链接");
       }
+    }
+    // Scenario 3: Preview Mode (No params)
+    else {
+      console.log("No params found. Entering Preview Mode.");
+      setData(PREVIEW_DATA);
+      setIsPreview(true);
     }
   }, [location]);
 
@@ -139,6 +189,13 @@ const ClientIndex: React.FC = () => {
       <div className="min-h-screen flex flex-col bg-white">
         <Header title="授权登录" theme="white" />
         
+        {/* Preview Mode Banner */}
+        {isPreview && (
+          <div className="bg-orange-100 text-orange-800 text-xs font-bold text-center py-2 border-b border-orange-200">
+             ⚠️ 预览模式：当前展示为测试数据 (无真实数据)
+          </div>
+        )}
+
         <div className="flex-1 flex flex-col p-6 animate-fade-in">
            {/* Corporate Identity / Logo Area */}
            <div className="flex flex-col items-center justify-center mb-10 mt-6">
@@ -237,6 +294,13 @@ const ClientIndex: React.FC = () => {
   return (
     <div className="min-h-screen bg-jh-light flex flex-col pb-10">
       <Header title="新核心车险承保" />
+      
+      {/* Preview Mode Banner */}
+      {isPreview && (
+        <div className="bg-orange-100 text-orange-800 text-xs font-bold text-center py-2 border-b border-orange-200">
+           ⚠️ 预览模式：当前展示为测试数据
+        </div>
+      )}
 
       {/* Progress Bar (simplified) */}
       <div className="bg-white px-4 py-2 flex justify-between items-center text-xs text-gray-400 border-b border-gray-100 mb-2">
@@ -272,6 +336,9 @@ const ClientIndex: React.FC = () => {
             >
               验证并继续
             </button>
+            {isPreview && (
+              <p className="text-xs text-orange-500 mt-2 text-center">预览提示：请输入 {data.proposer.mobile}</p>
+            )}
           </div>
         )}
 

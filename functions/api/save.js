@@ -1,5 +1,4 @@
 export async function onRequestPost(context) {
-  // CORS headers allowing access from the frontend
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -7,9 +6,8 @@ export async function onRequestPost(context) {
   };
 
   try {
-    // Parse JSON body
     const data = await context.request.json();
-    const id = crypto.randomUUID(); // Unique ID for short link
+    const id = crypto.randomUUID(); 
     const timestamp = Date.now();
 
     const storageRecord = {
@@ -18,20 +16,21 @@ export async function onRequestPost(context) {
       data
     };
 
-    // Access KV Namespace bound as 'JHPCIC_STORE'
-    if (context.env.JHPCIC_STORE) {
-      // Save with 30-day expiration
-      await context.env.JHPCIC_STORE.put(`order:${id}`, JSON.stringify(storageRecord), { expirationTtl: 2592000 });
+    // 使用用户发现的 KV_BINDING 变量名
+    const kv = context.env.KV_BINDING || context.env.JHPCIC_STORE;
+
+    if (kv) {
+      // 存储数据，有效期 30 天
+      await kv.put(`order:${id}`, JSON.stringify(storageRecord), { expirationTtl: 2592000 });
       return new Response(JSON.stringify({ success: true, id }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     } else {
-      return new Response(JSON.stringify({ error: "KV Namespace 'JHPCIC_STORE' not bound in Pages Settings" }), { status: 500, headers: corsHeaders });
+      return new Response(JSON.stringify({ error: "Cloudflare KV 未绑定。请在 Pages 设置中绑定变量名为 'KV_BINDING' 的 KV 空间。" }), { status: 500, headers: corsHeaders });
     }
   } catch (err) {
     return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: corsHeaders });
   }
 }
 
-// Handle preflight OPTIONS request
 export async function onRequestOptions() {
   return new Response(null, {
     headers: {

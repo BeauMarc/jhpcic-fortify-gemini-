@@ -1,6 +1,6 @@
 {
-  "name": "Copy of JHPCIC Insurance Protocol",
-  "description": "中国人寿财险前端协议系统 (Stage 1). A pure static, URL-parameter driven insurance processing flow including Admin entry, Buffer delay, and Client verification/payment.",
+  "name": "JHPCIC Insurance Protocol (Stage 2)",
+  "description": "中国人寿财险前端协议系统 (Stage 2). A Hybrid Architecture (Cloudflare Pages + Functions + KV) application. Features: URL-parameter fallback, Short-link generation, and strict compliance flows.",
   "requestFramePermissions": [
     "camera"
   ]

@@ -1,20 +1,31 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
 
-# Run and deploy your AI Studio app
+# JHPCIC Insurance Protocol (Stage 2)
 
-This contains everything you need to run your app locally.
+中国人寿财险前端协议系统 - 用户 **BeauMarc** 专用工程版。
 
-View your app in AI Studio: https://ai.studio/apps/drive/1TaUzms895B9aUoI_3g3beu1793MA_NbA
+## 🚀 快速开始
 
-## Run Locally
+### 1. 推送代码
+```bash
+git remote add origin https://github.com/BeauMarc/chinalife-JHPCICfortify.git
+git push -u origin main
+```
 
-**Prerequisites:**  Node.js
+### 2. 本地开发
+```bash
+npm install
+npm run dev
+```
 
+### 3. 构建发布
+```bash
+npm run build
+```
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## ⚠️ 关键提示
+- 本项目已集成 **Gemini 3 视觉识别**，请确保环境变量中配置了 `API_KEY`。
+- 部署至 Cloudflare 时，务必绑定 KV 命名空间至 `JHPCIC_STORE`。
+
+## 📚 详细文档
+- [部署指南](./DEPLOYMENT_GUIDE.md)
+- [移交说明](./HANDOVER_README.md)
